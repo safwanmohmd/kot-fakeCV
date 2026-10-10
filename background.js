@@ -1,8 +1,3 @@
-chrome.runtime.onMessageExternal = (message, sender, sendResponse) => {
-  // Handle messages if called externally
-};
-
-// Listen for direct download requests from the page
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === "DOWNLOAD_VIDEO_URL") {
     chrome.downloads.download({
@@ -16,6 +11,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true, downloadId });
       }
     });
-    return true; // Keep message channel open for async response
+    return true;
   }
 });

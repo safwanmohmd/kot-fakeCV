@@ -2,7 +2,7 @@
   if (window.__vcamStudioLoaded) return;
   window.__vcamStudioLoaded = true;
 
-  // Engine state
+  // Global Engine State
   const state = {
     mode: "real", // "real" | "video" | "snapshot" | "grabbed"
     videoEl: document.createElement("video"),
@@ -14,7 +14,15 @@
     noise: 0,
     fps: 30,
     activeVideoTrack: null,
-    targetPageVideo: null
+    targetPageVideo: null,
+    // Customizable hotkey configuration (stored in localStorage)
+    shortcut: JSON.parse(localStorage.getItem("__kot_mockcam_shortcut") || JSON.stringify({
+      altKey: true,
+      ctrlKey: false,
+      shiftKey: false,
+      key: "a",
+      label: "Alt + A"
+    }))
   };
 
   state.canvas.width = 1280;
@@ -44,9 +52,7 @@
       } else if (state.mode === "snapshot" && state.imageEl.complete && state.imageEl.src) {
         ctx.drawImage(state.imageEl, 0, 0, canvas.width, canvas.height);
       }
-    } catch (e) {
-      // Ignored for CORS tainted canvas
-    }
+    } catch (e) {}
 
     if (noise > 0) {
       try {
@@ -67,7 +73,7 @@
   }
   requestAnimationFrame(renderPipeline);
 
-  // WebRTC Hooks
+  // WebRTC API Hooks
   const originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
   const originalEnumerateDevices = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);
 
@@ -75,10 +81,10 @@
     const devices = await originalEnumerateDevices();
     if (!devices.some(d => d.kind === "videoinput")) {
       devices.push({
-        deviceId: "mock-vcam-default",
-        groupId: "mock-vcam-group",
+        deviceId: "kot-mockcam-device",
+        groupId: "kot-mockcam-group",
         kind: "videoinput",
-        label: "HD Web Camera (Virtual Pro)"
+        label: "kot-mockcam Virtual Device"
       });
     }
     return devices;
@@ -109,15 +115,13 @@
     return originalGetUserMedia(constraints);
   };
 
-  // Find all active on-page video tags
   function scanPageVideos() {
     const vids = Array.from(document.querySelectorAll("video"));
     return vids.filter(v => v !== state.videoEl && (v.currentSrc || v.src || v.querySelector("source")?.src));
   }
 
-  // Extract source URL and trigger direct download
-  async function triggerDirectDownload(sourceElement, statusBtn) {
-    statusBtn.textContent = "⏳ Resolving URL...";
+  function triggerDirectDownload(sourceElement, statusBtn) {
+    statusBtn.textContent = "⏳ Extracting...";
 
     let rawUrl = sourceElement.currentSrc || sourceElement.src;
     if (!rawUrl) {
@@ -126,15 +130,14 @@
     }
 
     if (!rawUrl) {
-      statusBtn.textContent = "❌ No URL Found";
+      statusBtn.textContent = "❌ No Source URL";
       setTimeout(() => { statusBtn.textContent = "⬇️ Direct Download"; }, 3000);
       return;
     }
 
-    // Try downloading via invisible link first
     const a = document.createElement("a");
     a.href = rawUrl;
-    a.download = `video_${Date.now()}.mp4`;
+    a.download = `kot_video_${Date.now()}.mp4`;
     a.target = "_blank";
     a.rel = "noreferrer noopener";
     document.body.appendChild(a);
@@ -145,12 +148,48 @@
     setTimeout(() => { statusBtn.textContent = "⬇️ Direct Download"; }, 3000);
   }
 
-  // Build Floating HUD
-  function mountControlPanel() {
-    if (document.getElementById("__vcam_hud")) return;
+  function toggleMenuVisibility() {
+    const hud = document.getElementById("__kot_mockcam_hud");
+    if (!hud) {
+      mountControlPanel();
+      return;
+    }
+    hud.style.display = hud.style.display === "none" ? "block" : "none";
+  }
 
-    const hud = document.createElement("div");
-    hud.id = "__vcam_hud";
+  // Global Key Listener for Toggle Shortcut
+  window.addEventListener("keydown", (e) => {
+    // Skip if user is typing inside the shortcut binder input
+    if (e.target && e.target.id === "__kot_hotkey_input") return;
+
+    const s = state.shortcut;
+    const keyMatch = e.key.toLowerCase() === s.key.toLowerCase();
+    const altMatch = !!e.altKey === !!s.altKey;
+    const ctrlMatch = !!e.ctrlKey === !!s.ctrlKey;
+    const shiftMatch = !!e.shiftKey === !!s.shiftKey;
+
+    if (keyMatch && altMatch && ctrlMatch && shiftMatch) {
+      e.preventDefault();
+      toggleMenuVisibility();
+    }
+  });
+
+  function mountControlPanel() {
+    let hud = document.getElementById("__kot_mockcam_hud");
+    if (hud) {
+      hud.style.display = "block";
+      return;
+    }
+
+    let iconUrl = "";
+    try {
+      iconUrl = chrome.runtime.getURL("icon.png");
+    } catch (e) {
+      iconUrl = "";
+    }
+
+    hud = document.createElement("div");
+    hud.id = "__kot_mockcam_hud";
     Object.assign(hud.style, {
       position: "fixed",
       top: "16px",
@@ -164,66 +203,75 @@
       fontSize: "12px",
       zIndex: "2147483647",
       overflow: "hidden",
-      userSelect: "none"
+      userSelect: "none",
+      display: "block"
     });
 
     hud.innerHTML = `
-      <div id="__vcam_header" style="padding: 10px 14px; background: #181c22; cursor: grab; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06);">
+      <div id="__kot_header" style="padding: 10px 14px; background: #181c22; cursor: grab; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.06);">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="width: 8px; height: 8px; background: #10b981; border-radius: 50%;"></span>
-          <strong style="font-size: 13px; color: #fff;">VirtualCam Studio Pro</strong>
+          ${iconUrl ? `<img src="${iconUrl}" style="width: 24px; height: 24px; border-radius: 50%; object-fit: cover; border: 1.5px solid #10b981;" alt="Avatar" />` : `<span style="width: 10px; height: 10px; background: #10b981; border-radius: 50%;"></span>`}
+          <strong style="font-size: 13px; color: #fff; letter-spacing: 0.5px;">kot-mockcam</strong>
         </div>
-        <button id="__vcam_toggle_min" style="background: none; border: none; color: #8a92a0; cursor: pointer; font-size: 14px;">−</button>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button id="__kot_toggle_min" title="Minimize" style="background: none; border: none; color: #8a92a0; cursor: pointer; font-size: 16px; padding: 0 4px;">−</button>
+          <button id="__kot_btn_close" title="Close (Toggle with Hotkey)" style="background: none; border: none; color: #8a92a0; cursor: pointer; font-size: 14px; padding: 0 4px;">✕</button>
+        </div>
       </div>
 
-      <div id="__vcam_body" style="padding: 14px; display: flex; flex-direction: column; gap: 12px;">
+      <div id="__kot_body" style="padding: 14px; display: flex; flex-direction: column; gap: 12px;">
         <!-- Tabs -->
         <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; background: #0c0d10; padding: 4px; border-radius: 8px;">
-          <button class="vcam-btn" data-mode="video" style="background: #2563eb; color: #fff; padding: 6px 0; border: none; border-radius: 6px; cursor: pointer;">Video</button>
-          <button class="vcam-btn" data-mode="grabbed" style="background: transparent; color: #8a92a0; padding: 6px 0; border: none; border-radius: 6px; cursor: pointer;">Grab</button>
-          <button class="vcam-btn" data-mode="snapshot" style="background: transparent; color: #8a92a0; padding: 6px 0; border: none; border-radius: 6px; cursor: pointer;">Snapshot</button>
-          <button class="vcam-btn" data-mode="real" style="background: transparent; color: #8a92a0; padding: 6px 0; border: none; border-radius: 6px; cursor: pointer;">Real</button>
+          <button class="kot-tab" data-mode="video" style="background: #2563eb; color: #fff; padding: 6px 0; border: none; border-radius: 6px; cursor: pointer;">Video</button>
+          <button class="kot-tab" data-mode="grabbed" style="background: transparent; color: #8a92a0; padding: 6px 0; border: none; border-radius: 6px; cursor: pointer;">Grab</button>
+          <button class="kot-tab" data-mode="snapshot" style="background: transparent; color: #8a92a0; padding: 6px 0; border: none; border-radius: 6px; cursor: pointer;">Snapshot</button>
+          <button class="kot-tab" data-mode="real" style="background: transparent; color: #8a92a0; padding: 6px 0; border: none; border-radius: 6px; cursor: pointer;">Real</button>
         </div>
 
-        <!-- 1. Video Upload -->
-        <div id="__vcam_video_panel" style="display: flex; flex-direction: column; gap: 8px;">
-          <input type="file" id="__vcam_file_video" accept="video/*" style="display: none;" />
-          <button id="__vcam_btn_load_video" style="width: 100%; padding: 8px; background: #1e232b; border: 1px dashed rgba(255,255,255,0.2); border-radius: 6px; color: #cbd5e1; cursor: pointer;">
+        <!-- 1. Local Video Panel -->
+        <div id="__kot_video_panel" style="display: flex; flex-direction: column; gap: 8px;">
+          <input type="file" id="__kot_file_video" accept="video/*" style="display: none;" />
+          <button id="__kot_btn_load_video" style="width: 100%; padding: 8px; background: #1e232b; border: 1px dashed rgba(255,255,255,0.2); border-radius: 6px; color: #cbd5e1; cursor: pointer;">
             📁 Select Local Video (.mp4 / .webm)
           </button>
           <div style="display: flex; gap: 6px; align-items: center;">
-            <button id="__vcam_play_pause" style="flex: 1; padding: 6px; background: #1e232b; border: none; border-radius: 6px; color: #fff; cursor: pointer;">Pause</button>
-            <button id="__vcam_restart" style="padding: 6px 12px; background: #1e232b; border: none; border-radius: 6px; color: #fff; cursor: pointer;">↺</button>
+            <button id="__kot_play_pause" style="flex: 1; padding: 6px; background: #1e232b; border: none; border-radius: 6px; color: #fff; cursor: pointer;">Pause</button>
+            <button id="__kot_restart" style="padding: 6px 12px; background: #1e232b; border: none; border-radius: 6px; color: #fff; cursor: pointer;">↺</button>
           </div>
         </div>
 
         <!-- 2. On-Page Video Grabber Panel -->
-        <div id="__vcam_grab_panel" style="display: none; flex-direction: column; gap: 8px;">
-          <button id="__vcam_btn_scan" style="width: 100%; padding: 8px; background: #10b981; color: #000; font-weight: bold; border: none; border-radius: 6px; cursor: pointer;">
+        <div id="__kot_grab_panel" style="display: none; flex-direction: column; gap: 8px;">
+          <button id="__kot_btn_scan" style="width: 100%; padding: 8px; background: #10b981; color: #000; font-weight: bold; border: none; border-radius: 6px; cursor: pointer;">
             🔍 Detect Videos on This Page
           </button>
-          <div id="__vcam_detected_list" style="display: flex; flex-direction: column; gap: 6px; max-height: 140px; overflow-y: auto;">
-            <span style="color: #64748b; font-size: 11px; text-align: center;">Click Detect to search page for playing videos</span>
+          <div id="__kot_detected_list" style="display: flex; flex-direction: column; gap: 6px; max-height: 140px; overflow-y: auto;">
+            <span style="color: #64748b; font-size: 11px; text-align: center;">Click Detect to find on-page videos</span>
           </div>
         </div>
 
-        <!-- 3. Snapshot -->
-        <div id="__vcam_image_panel" style="display: none; flex-direction: column; gap: 8px;">
-          <input type="file" id="__vcam_file_image" accept="image/*" style="display: none;" />
-          <button id="__vcam_btn_load_image" style="width: 100%; padding: 8px; background: #1e232b; border: 1px dashed rgba(255,255,255,0.2); border-radius: 6px; color: #cbd5e1; cursor: pointer;">
+        <!-- 3. Image Snapshot Panel -->
+        <div id="__kot_image_panel" style="display: none; flex-direction: column; gap: 8px;">
+          <input type="file" id="__kot_file_image" accept="image/*" style="display: none;" />
+          <button id="__kot_btn_load_image" style="width: 100%; padding: 8px; background: #1e232b; border: 1px dashed rgba(255,255,255,0.2); border-radius: 6px; color: #cbd5e1; cursor: pointer;">
             🖼️ Select Snapshot (.png / .jpg)
           </button>
         </div>
 
-        <!-- Adjustments -->
+        <!-- Custom Controls -->
         <div style="display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px;">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <label>Sensor Grain (Noise)</label>
-            <input id="__vcam_noise" type="range" min="0" max="25" value="0" style="width: 120px;" />
+            <label>Sensor Grain</label>
+            <input id="__kot_noise" type="range" min="0" max="25" value="0" style="width: 120px;" />
           </div>
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <label>Brightness</label>
-            <input id="__vcam_brightness" type="range" min="50" max="150" value="100" style="width: 120px;" />
+            <input id="__kot_brightness" type="range" min="50" max="150" value="100" style="width: 120px;" />
+          </div>
+          <!-- Customizable Toggle Hotkey Option -->
+          <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 8px;">
+            <label style="color: #94a3b8;">Toggle Menu Key</label>
+            <input id="__kot_hotkey_input" type="text" readonly value="${state.shortcut.label}" style="width: 120px; text-align: center; background: #1e232b; border: 1px solid #334155; border-radius: 4px; color: #38bdf8; padding: 4px; font-weight: bold; cursor: pointer;" title="Click and press your desired shortcut" />
           </div>
         </div>
       </div>
@@ -231,8 +279,8 @@
 
     document.body.appendChild(hud);
 
-    // Draggable header
-    const header = hud.querySelector("#__vcam_header");
+    // Draggable Window Handling
+    const header = hud.querySelector("#__kot_header");
     let isDragging = false, startX, startY, initialLeft, initialTop;
     header.addEventListener("mousedown", (e) => {
       isDragging = true;
@@ -252,40 +300,73 @@
     });
     window.addEventListener("mouseup", () => { isDragging = false; });
 
-    // Minimize toggle
-    const toggleMin = hud.querySelector("#__vcam_toggle_min");
-    const body = hud.querySelector("#__vcam_body");
+    // Minimize & Close
+    const toggleMin = hud.querySelector("#__kot_toggle_min");
+    const body = hud.querySelector("#__kot_body");
     toggleMin.addEventListener("click", () => {
       const isHidden = body.style.display === "none";
       body.style.display = isHidden ? "flex" : "none";
       toggleMin.textContent = isHidden ? "−" : "+";
     });
 
-    // Tab handlers
-    const modeButtons = hud.querySelectorAll(".vcam-btn");
-    const videoPanel = hud.querySelector("#__vcam_video_panel");
-    const grabPanel = hud.querySelector("#__vcam_grab_panel");
-    const imagePanel = hud.querySelector("#__vcam_image_panel");
+    hud.querySelector("#__kot_btn_close").addEventListener("click", () => {
+      hud.style.display = "none";
+    });
 
-    modeButtons.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        modeButtons.forEach((b) => {
-          b.style.background = "transparent";
-          b.style.color = "#8a92a0";
+    // Custom Keybinding Input Logic
+    const hotkeyInput = hud.querySelector("#__kot_hotkey_input");
+    hotkeyInput.addEventListener("keydown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Ignore pure modifier presses
+      if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
+
+      const keys = [];
+      if (e.ctrlKey) keys.push("Ctrl");
+      if (e.altKey) keys.push("Alt");
+      if (e.shiftKey) keys.push("Shift");
+      keys.push(e.key.toUpperCase());
+
+      const label = keys.join(" + ");
+      state.shortcut = {
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        shiftKey: e.shiftKey,
+        key: e.key,
+        label: label
+      };
+
+      localStorage.setItem("__kot_mockcam_shortcut", JSON.stringify(state.shortcut));
+      hotkeyInput.value = label;
+      hotkeyInput.blur();
+    });
+
+    // Tab Switching
+    const tabs = hud.querySelectorAll(".kot-tab");
+    const videoPanel = hud.querySelector("#__kot_video_panel");
+    const grabPanel = hud.querySelector("#__kot_grab_panel");
+    const imagePanel = hud.querySelector("#__kot_image_panel");
+
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        tabs.forEach((t) => {
+          t.style.background = "transparent";
+          t.style.color = "#8a92a0";
         });
-        btn.style.background = "#2563eb";
-        btn.style.color = "#fff";
+        tab.style.background = "#2563eb";
+        tab.style.color = "#fff";
 
-        state.mode = btn.dataset.mode;
+        state.mode = tab.dataset.mode;
         videoPanel.style.display = state.mode === "video" ? "flex" : "none";
         grabPanel.style.display = state.mode === "grabbed" ? "flex" : "none";
         imagePanel.style.display = state.mode === "snapshot" ? "flex" : "none";
       });
     });
 
-    // Video selector
-    const vidFileInput = hud.querySelector("#__vcam_file_video");
-    const loadVidBtn = hud.querySelector("#__vcam_btn_load_video");
+    // Local Video Events
+    const vidFileInput = hud.querySelector("#__kot_file_video");
+    const loadVidBtn = hud.querySelector("#__kot_btn_load_video");
     loadVidBtn.addEventListener("click", () => vidFileInput.click());
     vidFileInput.addEventListener("change", (e) => {
       if (e.target.files[0]) {
@@ -295,7 +376,7 @@
       }
     });
 
-    hud.querySelector("#__vcam_play_pause").addEventListener("click", (e) => {
+    hud.querySelector("#__kot_play_pause").addEventListener("click", (e) => {
       const vid = state.mode === "grabbed" && state.targetPageVideo ? state.targetPageVideo : state.videoEl;
       if (vid.paused) {
         vid.play();
@@ -306,15 +387,15 @@
       }
     });
 
-    hud.querySelector("#__vcam_restart").addEventListener("click", () => {
+    hud.querySelector("#__kot_restart").addEventListener("click", () => {
       const vid = state.mode === "grabbed" && state.targetPageVideo ? state.targetPageVideo : state.videoEl;
       vid.currentTime = 0;
       vid.play();
     });
 
-    // Page Scan Logic
-    const scanBtn = hud.querySelector("#__vcam_btn_scan");
-    const detectedList = hud.querySelector("#__vcam_detected_list");
+    // Scanner
+    const scanBtn = hud.querySelector("#__kot_btn_scan");
+    const detectedList = hud.querySelector("#__kot_detected_list");
 
     scanBtn.addEventListener("click", () => {
       const videos = scanPageVideos();
@@ -339,22 +420,21 @@
         item.innerHTML = `
           <span style="font-weight: 600; color: #fff;">Video #${index + 1} (${vid.videoWidth || '?'}x${vid.videoHeight || '?'})</span>
           <div style="display: flex; gap: 6px;">
-            <button class="vcam-use-cam" style="flex: 1; padding: 5px; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer;">🎥 Use as Cam</button>
-            <button class="vcam-dl-rec" style="flex: 1; padding: 5px; background: #334155; color: #fff; border: none; border-radius: 4px; cursor: pointer;">⬇️ Direct Download</button>
+            <button class="kot-use-cam" style="flex: 1; padding: 5px; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer;">🎥 Use as Cam</button>
+            <button class="kot-dl-btn" style="flex: 1; padding: 5px; background: #334155; color: #fff; border: none; border-radius: 4px; cursor: pointer;">⬇️ Direct Download</button>
           </div>
         `;
 
-        item.querySelector(".vcam-use-cam").addEventListener("click", () => {
+        item.querySelector(".kot-use-cam").addEventListener("click", () => {
           state.targetPageVideo = vid;
           state.mode = "grabbed";
-          modeButtons.forEach(b => {
-            b.style.background = b.dataset.mode === "grabbed" ? "#2563eb" : "transparent";
-            b.style.color = b.dataset.mode === "grabbed" ? "#fff" : "#8a92a0";
+          tabs.forEach(t => {
+            t.style.background = t.dataset.mode === "grabbed" ? "#2563eb" : "transparent";
+            t.style.color = t.dataset.mode === "grabbed" ? "#fff" : "#8a92a0";
           });
-          alert(`Video #${index + 1} linked directly to Virtual Cam output!`);
         });
 
-        const dlBtn = item.querySelector(".vcam-dl-rec");
+        const dlBtn = item.querySelector(".kot-dl-btn");
         dlBtn.addEventListener("click", () => {
           triggerDirectDownload(vid, dlBtn);
         });
@@ -363,9 +443,9 @@
       });
     });
 
-    // Image Snapshot Selector
-    const imgFileInput = hud.querySelector("#__vcam_file_image");
-    const loadImgBtn = hud.querySelector("#__vcam_btn_load_image");
+    // Snapshot Selector
+    const imgFileInput = hud.querySelector("#__kot_file_image");
+    const loadImgBtn = hud.querySelector("#__kot_btn_load_image");
     loadImgBtn.addEventListener("click", () => imgFileInput.click());
     imgFileInput.addEventListener("change", (e) => {
       if (e.target.files[0]) {
@@ -374,11 +454,11 @@
       }
     });
 
-    // Filters
-    hud.querySelector("#__vcam_noise").addEventListener("input", (e) => {
+    // Sliders
+    hud.querySelector("#__kot_noise").addEventListener("input", (e) => {
       state.noise = parseFloat(e.target.value);
     });
-    hud.querySelector("#__vcam_brightness").addEventListener("input", (e) => {
+    hud.querySelector("#__kot_brightness").addEventListener("input", (e) => {
       state.brightness = parseFloat(e.target.value);
     });
   }
